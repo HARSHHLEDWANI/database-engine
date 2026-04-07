@@ -67,7 +67,8 @@ db_engine/
 │   ├── storage/
 │   │   ├── disk_manager.py       # raw page read/write
 │   │   ├── page.py               # page layout, header, slots
-│   │   └── record.py             # serialize/deserialize rows
+│   │   ├── record.py             # serialize/deserialize rows
+│   │   └── catalog.py            # table schema and metadata
 │   │
 │   ├── index/
 │   │   ├── btree.py              # B-Tree node + tree operations
@@ -76,6 +77,7 @@ db_engine/
 │   ├── query/
 │   │   ├── lexer.py              # tokenize SQL string
 │   │   ├── parser.py             # produce AST from tokens
+│   │   ├── planner.py            # choose execution plan
 │   │   └── executor.py           # walk AST, call storage/index
 │   │
 │   ├── transaction/
@@ -83,16 +85,22 @@ db_engine/
 │   │   └── recovery.py           # replay log after crash
 │   │
 │   ├── buffer/
+│   │   ├── lru_list.py           # doubly linked list for LRU
 │   │   └── buffer_pool.py        # LRU page cache
 │   │
 │   ├── utils/
-│   │   └── serializer.py         # int/string encode-decode helpers
+│   │   ├── serializer.py         # int/string encode-decode helpers
+│   │   └── btree_check.py        # B-Tree integrity verifier
 │   │
-│   └── main.py                   # REPL entry point
+│   └── main.py                   # REPL entry point + Engine facade
 │
 ├── data/                         # all .db and .wal files live here
-├── tests/                        # one test file per module
-├── docs/                         # this folder
+├── tests/
+│   ├── unit/                     # one test file per module
+│   ├── integration/              # cross-layer tests
+│   ├── stress/                   # high-volume correctness + perf
+│   └── crash/                    # simulated crash + recovery tests
+├── docs/                         # this folder (phase guides)
 └── learning.md                   # your personal concept journal
 ```
 
@@ -117,12 +125,12 @@ You must pick one language. Here are the honest trade-offs:
 
 | Phase | File | What You Build | Key Concept |
 |-------|------|----------------|-------------|
-| 1 | `01_storage_engine.md` | Disk Manager + Pages + Records | Binary I/O |
-| 2 | `02_indexing_btree.md` | B-Tree from scratch | Tree traversal |
-| 3 | `03_query_engine.md` | Lexer + Parser + Executor | SQL → AST → result |
-| 4 | `04_transactions_wal.md` | WAL + crash recovery | Durability |
-| 5 | `05_optimization.md` | Buffer pool + query planning | Performance |
-| 6 | `06_final_project.md` | Integration + stress testing | Systems thinking |
+| 1 | [01_storage_engine.md](01_storage_engine.md) | Disk Manager + Pages + Records | Binary I/O, slotted pages |
+| 2 | [02_indexing_btree.md](02_indexing_btree.md) | B+ Tree from scratch | Tree traversal, node splitting |
+| 3 | [03_query_engine.md](03_query_engine.md) | Lexer + Parser + Executor | SQL → AST → result |
+| 4 | [04_transactions_wal.md](04_transactions_wal.md) | WAL + crash recovery | Atomicity, durability |
+| 5 | [05_optimization.md](05_optimization.md) | Buffer pool + query planning | Caching, cost models |
+| 6 | [06_final_project.md](06_final_project.md) | Integration + stress testing | Systems thinking |
 
 Do not skip phases. Every phase builds on the previous one.
 
@@ -147,45 +155,56 @@ db>
 
 ### Running Tests
 ```bash
-python -m pytest tests/ -v
-```
+# Unit tests (fast)
+python -m pytest tests/unit/ -v
 
-Each phase has its own test file. Write tests as you go — do not defer them.
+# Integration tests (medium)
+python -m pytest tests/integration/ -v
+
+# Full suite
+python -m pytest tests/ -v
+
+# Stress + benchmark
+python tests/stress/benchmark.py
+```
 
 ---
 
 ## Final Capabilities (What "Done" Looks Like)
 
-- `INSERT INTO <table> VALUES (...)` — stores rows on disk
+- `CREATE TABLE <name> (<col> <type>, ...) PRIMARY KEY <col>;`
+- `INSERT INTO <table> VALUES (...);` — stores rows on disk via WAL
 - `SELECT * FROM <table>` — full table scan
 - `SELECT * FROM <table> WHERE id = <n>` — B-Tree indexed lookup
 - Data persists across process restarts
-- Crash mid-write is safely recoverable via WAL
-- Buffer pool keeps hot pages in memory, evicts cold ones
+- Crash mid-write is safely recoverable via WAL replay
+- Buffer pool keeps hot pages in memory, evicts cold ones (LRU)
+- Query planner chooses index scan vs full scan based on cost
 
 ---
 
 ## Ground Rules Before You Start
 
 1. **Read the phase doc before writing any code.** Understand the design, then implement.
-2. **Write tests for every function.** If it reads a page, test that the right bytes come back.
+2. **Write tests before or alongside the implementation.** If it reads a page, test that the right bytes come back.
 3. **Update `learning.md` after each phase.** Writing forces understanding.
 4. **Do not use any database libraries.** `sqlite3`, `sqlalchemy`, `psycopg2` are all banned.
-5. **Binary files only.** No JSON, no CSV, no text-based storage. Real databases don't use them.
+5. **Binary files only.** No JSON storage for rows. The catalog uses JSON (acceptable) — row data never does.
 
 ---
 
 ## Key Mental Model: Everything Is a Page
 
-Every piece of data in this system — rows, B-Tree nodes, the WAL, the schema — lives inside a page. A page is just `PAGE_SIZE` bytes. The database never reads or writes smaller units than one page. Internalize this before moving on.
+Every piece of data in this system — rows, B-Tree nodes, the catalog, WAL records — lives at a well-known location. A page is just `PAGE_SIZE` bytes. The database never reads or writes smaller units than one page. Internalize this before moving on.
 
 ```
-File = [Page 0][Page 1][Page 2]...[Page N]
-         ↑
-    File Header
-    (DB metadata)
+Database File = [Page 0][Page 1][Page 2]...[Page N]
+                    ↑         ↑
+              File Header   Catalog
+
+Page N is at byte offset: N * PAGE_SIZE
 ```
 
 ---
 
-*Start with `01_storage_engine.md`.*
+*Start with [01_storage_engine.md](01_storage_engine.md).*
