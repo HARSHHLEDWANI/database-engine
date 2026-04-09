@@ -1,2 +1,6 @@
 .claude/
 data/*.db
+docs/
+.pytest_cache
+src/storage/__pycache__
+tests/__pycache__
